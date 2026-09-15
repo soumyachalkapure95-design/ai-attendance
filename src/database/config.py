@@ -2,26 +2,55 @@ import os
 import streamlit as st
 from supabase import create_client, Client
 
-def get_secret(key: str, default: str = "") -> str:
-    # 1. Try streamlit secrets
+@st.cache_resource
+def _create_cached_supabase_client(url: str, key: str):
+    return create_client(url, key)
+
+def get_supabase_client():
+    url = ""
+    key = ""
+    
+    # Check Streamlit secrets
     try:
-        if key in st.secrets:
-            val = st.secrets[key]
-            if val:
-                return str(val)
+        if "SUPABASE_URL" in st.secrets:
+            url = str(st.secrets["SUPABASE_URL"]).strip()
     except Exception:
         pass
-    # 2. Try environment variables
-    return os.environ.get(key, default)
+        
+    if not url:
+        url = os.environ.get("SUPABASE_URL", "").strip()
 
-supabase_url = get_secret("SUPABASE_URL", "")
-supabase_key = get_secret("SUPABASE_KEY", "")
-
-supabase: Client = None
-
-if supabase_url and supabase_key and "your-supabase" not in supabase_url:
     try:
-        supabase = create_client(supabase_url, supabase_key)
+        if "SUPABASE_KEY" in st.secrets:
+            key = str(st.secrets["SUPABASE_KEY"]).strip()
+    except Exception:
+        pass
+        
+    if not key:
+        key = os.environ.get("SUPABASE_KEY", "").strip()
+
+    # Validation
+    missing = []
+    if not url or "your-supabase" in url:
+        missing.append("SUPABASE_URL")
+    if not key or "your-supabase" in key:
+        missing.append("SUPABASE_KEY")
+
+    if missing:
+        return None, f"Secrets not found or using placeholders ({', '.join(missing)}). Please check Streamlit Cloud App Settings -> Secrets."
+
+    try:
+        client = _create_cached_supabase_client(url, key)
+        return client, None
     except Exception as e:
-        print(f"Supabase Client Error: {e}")
-        supabase = None
+        return None, f"Failed to initialize Supabase client: {e}"
+
+# Backward compatibility proxy
+class SupabaseProxy:
+    def __getattr__(self, name):
+        client, err = get_supabase_client()
+        if not client:
+            raise RuntimeError(err or "Supabase client not available")
+        return getattr(client, name)
+
+supabase = SupabaseProxy()
